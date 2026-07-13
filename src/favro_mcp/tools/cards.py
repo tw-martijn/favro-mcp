@@ -80,6 +80,8 @@ def _card_to_dict(card: Card) -> dict[str, Any]:
         "start_date": card.start_date.isoformat() if card.start_date else None,
         "due_date": card.due_date.isoformat() if card.due_date else None,
         "archived": card.archived,
+        "todo_list_user_id": card.todo_list_user_id,
+        "todo_list_completed": card.todo_list_completed,
         "tasks_done": card.tasks_done,
         "tasks_total": card.tasks_total,
         "time_on_board": card.time_on_board,
@@ -100,36 +102,58 @@ def _card_to_dict(card: Card) -> dict[str, Any]:
 
 @mcp.tool
 def list_cards(
-    board: str,
     ctx: Context,
+    board: str | None = None,
     column: str | None = None,
+    card_sequential_id: int | None = None,
+    unique: bool = True,
     archived: bool | None = None,
     page: int = 0,
 ) -> dict[str, Any]:
-    """List cards on a specific board with pagination.
+    """List cards on a board, or look up all instances of a single card.
+
+    The Favro API requires at least one filter. Provide either `board` (to
+    list cards on a board) or `card_sequential_id` (to find every widget a
+    card is committed to).
 
     Args:
-        board: The board's widget_common_id, name, or ID
-        column: Optional column ID or name to filter by
+        board: Board widget_common_id, name, or ID. Required unless
+            card_sequential_id is set.
+        column: Optional column ID or name to filter by (only with board)
+        card_sequential_id: Look up a single card across all widgets by its
+            sequential number (e.g. 5855 for #5855). Combine with
+            unique=False to see every widget instance the card lives on.
+        unique: If True (default), return one entry per card. If False,
+            return one entry per widget the card is committed to — useful
+            with card_sequential_id to enumerate boards a card is on.
         archived: Filter by archived status. True = only archived, False = only non-archived, None = all (default).
         page: Page number (0-indexed, default 0). Each page contains up to 100 cards.
 
     Returns:
-        A list of cards with pagination metadata.
+        A list of cards with pagination metadata. When unique=False, each
+        entry includes widget_common_id so you can see board membership.
     """
+    if board is None and card_sequential_id is None:
+        raise ValueError("Either 'board' or 'card_sequential_id' must be provided.")
+
     favro_ctx = get_favro_context(ctx)
     favro_ctx.require_org()
     with favro_ctx.get_client() as client:
-        board_id = BoardResolver(client).resolve(board).widget_common_id
+        board_id = None
+        if board:
+            board_id = BoardResolver(client).resolve(board).widget_common_id
 
-        # Resolve column if provided
         column_id = None
         if column:
+            if not board_id:
+                raise ValueError("`column` filter requires `board`.")
             column_id = ColumnResolver(client).resolve(column, board_id=board_id).column_id
 
         cards, total_pages = client.get_cards_page(
             widget_common_id=board_id,
             column_id=column_id,
+            card_sequential_id=card_sequential_id,
+            unique=unique,
             archived=archived,
             page=page,
         )
@@ -139,9 +163,64 @@ def list_cards(
                 "card_id": card.card_id,
                 "sequential_id": card.sequential_id,
                 "name": card.name,
+                "widget_common_id": card.widget_common_id,
                 "column_id": card.column_id,
                 "tags": card.tags,
                 "archived": card.archived,
+            }
+            for card in cards
+        ]
+        return {
+            "cards": result,
+            "page": page,
+            "total_pages": total_pages,
+            "cards_on_page": len(result),
+        }
+
+
+@mcp.tool
+def list_todo_cards(
+    ctx: Context,
+    completed: bool | None = None,
+    page: int = 0,
+) -> dict[str, Any]:
+    """List cards on the authenticated user's todo list.
+
+    Favro's API only exposes the authenticated user's own todo list — todo
+    lists of other users are not accessible. To add a card to another user's
+    todo list, assign them via assign_card (Favro surfaces assigned cards on
+    the assignee's todo list).
+
+    Args:
+        completed: Filter by todo completion status. True = only finished,
+            False = only unfinished, None = both (default).
+        page: Page number (0-indexed, default 0). Each page contains up to 100 cards.
+
+    Returns:
+        A list of todo cards with pagination metadata. Each card includes
+        todo_list_completed indicating whether the user has marked it finished.
+    """
+    favro_ctx = get_favro_context(ctx)
+    favro_ctx.require_org()
+    with favro_ctx.get_client() as client:
+        cards, total_pages = client.get_cards_page(
+            todo_list=True,
+            page=page,
+        )
+
+        if completed is not None:
+            cards = [c for c in cards if c.todo_list_completed == completed]
+
+        result = [
+            {
+                "card_id": card.card_id,
+                "sequential_id": card.sequential_id,
+                "name": card.name,
+                "widget_common_id": card.widget_common_id,
+                "column_id": card.column_id,
+                "todo_list_user_id": card.todo_list_user_id,
+                "todo_list_completed": card.todo_list_completed,
+                "tags": card.tags,
             }
             for card in cards
         ]
@@ -574,6 +653,56 @@ def assign_card(
             "card_id": updated.card_id,
             "user_id": u.user_id,
             "user_name": u.name,
+        }
+
+
+@mcp.tool
+def finish_card(
+    card: str,
+    ctx: Context,
+    board: str | None = None,
+    user: str | None = None,
+    finished: bool = True,
+) -> dict[str, Any]:
+    """Mark a card as finished (or not finished) on a user's todo list.
+
+    Toggles the per-user completion state on a card. The Favro UI calls this
+    "finished" / "not finished" on todo list cards. Works on any card the
+    user is assigned to (todo-list cards or board cards).
+
+    Args:
+        card: Card ID, sequential ID (#123), or name
+        board: Board ID or name (needed for name lookups)
+        user: User ID, name, or email. Defaults to the authenticated user.
+        finished: True to mark finished, False to mark not finished.
+
+    Returns:
+        The updated card details
+    """
+    favro_ctx = get_favro_context(ctx)
+    favro_ctx.require_org()
+    with favro_ctx.get_client() as client:
+        board_id = board or favro_ctx.current_board_id
+        if board:
+            board_id = BoardResolver(client).resolve(board).widget_common_id
+
+        c = CardResolver(client).resolve(card, board_id=board_id)
+
+        user_resolver = UserResolver(client)
+        u = user_resolver.resolve(user) if user else user_resolver.resolve(client.email)
+
+        updated = client.update_card(
+            card_id=c.card_id,
+            complete_assignments=[{"userId": u.user_id, "completed": finished}],
+        )
+
+        state = "finished" if finished else "not finished"
+        return {
+            "message": f"Marked card '{updated.name}' as {state} for {u.name}",
+            "card_id": updated.card_id,
+            "user_id": u.user_id,
+            "user_name": u.name,
+            "finished": finished,
         }
 
 

@@ -179,18 +179,20 @@ See [Codex MCP documentation](https://developers.openai.com/codex/mcp/) for more
 
 ### Cards
 
-| Tool                 | Description          |
-| -------------------- | -------------------- |
-| `list_cards`         | List cards on board  |
-| `get_card_details`   | Get card details     |
-| `add_comment`        | Add a comment to card |
-| `create_card`        | Create a card        |
-| `update_card`        | Update a card        |
-| `move_card`          | Move card to column  |
-| `assign_card`        | Assign/unassign user |
-| `tag_card`           | Add/remove tag       |
-| `delete_card`        | Delete a card        |
-| `list_custom_fields` | List custom fields   |
+| Tool                 | Description                                |
+| -------------------- | ------------------------------------------ |
+| `list_cards`         | List cards on board                        |
+| `list_todo_cards`    | List cards on the user's todo list         |
+| `get_card_details`   | Get card details                           |
+| `add_comment`        | Add a comment to card                      |
+| `create_card`        | Create a card                              |
+| `update_card`        | Update a card                              |
+| `move_card`          | Move card to column                        |
+| `assign_card`        | Assign/unassign user                       |
+| `finish_card`        | Mark card finished/not finished for a user |
+| `tag_card`           | Add/remove tag                             |
+| `delete_card`        | Delete a card                              |
+| `list_custom_fields` | List custom fields                         |
 
 ### Tags
 

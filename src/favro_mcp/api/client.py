@@ -517,6 +517,7 @@ class FavroClient:
         due_date: str | None = None,
         add_assignments: list[str] | None = None,
         remove_assignments: list[str] | None = None,
+        complete_assignments: list[dict[str, Any]] | None = None,
         archived: bool | None = None,
         list_position: float | None = None,
         custom_fields: list[dict[str, Any]] | None = None,
@@ -558,6 +559,8 @@ class FavroClient:
             data["addAssignmentIds"] = add_assignments
         if remove_assignments:
             data["removeAssignmentIds"] = remove_assignments
+        if complete_assignments:
+            data["completeAssignments"] = complete_assignments
         if archived is not None:
             data["archive"] = archived
         if list_position is not None:
